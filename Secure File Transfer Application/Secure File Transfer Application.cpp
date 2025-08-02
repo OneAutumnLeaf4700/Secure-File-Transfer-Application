@@ -12,14 +12,15 @@
 
 #define MAX_LOADSTRING 100
 
-// Dark theme colors
-#define COLOR_DARK_BG        RGB(32, 32, 32)      // Dark gray background
-#define COLOR_DARKER_BG      RGB(24, 24, 24)      // Darker background
-#define COLOR_ACCENT         RGB(0, 120, 215)     // Blue accent color
-#define COLOR_TEXT           RGB(255, 255, 255)   // White text
-#define COLOR_BORDER         RGB(64, 64, 64)      // Border color
-#define COLOR_DROPZONE       RGB(48, 48, 48)      // Drop zone color
-#define COLOR_DROPZONE_HOVER RGB(64, 64, 64)      // Drop zone hover color
+// Modern light theme colors
+#define COLOR_BG             RGB(250, 250, 250)   // Light gray background
+#define COLOR_PANEL          RGB(240, 240, 245)   // Panel background
+#define COLOR_ACCENT         RGB(0, 120, 215)     // Windows blue accent
+#define COLOR_TEXT           RGB(50, 50, 50)      // Dark gray text
+#define COLOR_BORDER         RGB(200, 200, 200)   // Light gray border
+#define COLOR_DROPZONE       RGB(245, 248, 252)   // Light blue-gray drop zone
+#define COLOR_DROPZONE_HOVER RGB(230, 240, 250)   // Hover state for drop zone
+#define COLOR_EDIT_BG        RGB(255, 255, 255)   // White edit control background
 
 // Global Variables:
 HINSTANCE hInst;                                // current instance
@@ -151,8 +152,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
    hInst = hInstance; // Store instance handle in our global variable
 
-   // Create main window with dark background
-   HWND hWnd = CreateWindowW(szWindowClass, L"Secure File Transfer - Modern Dark Theme", 
+   // Create main window with light background
+   HWND hWnd = CreateWindowW(szWindowClass, L"Secure File Transfer - Modern Light Theme",
       WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, 0, 1200, 800, nullptr, nullptr, hInstance, nullptr);
 
@@ -290,7 +291,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             HDC hdcStatic = (HDC)wParam;
             SetTextColor(hdcStatic, COLOR_TEXT);
-            SetBkColor(hdcStatic, COLOR_DARK_BG);
+            SetBkColor(hdcStatic, COLOR_BG);
             return (INT_PTR)hBrushDarkBg;
         }
         break;
@@ -299,7 +300,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             HDC hdcEdit = (HDC)wParam;
             SetTextColor(hdcEdit, COLOR_TEXT);
-            SetBkColor(hdcEdit, COLOR_DARKER_BG);
+            SetBkColor(hdcEdit, COLOR_EDIT_BG);
             return (INT_PTR)hBrushDarkerBg;
         }
         break;
@@ -352,16 +353,16 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 //
 void InitializeDarkTheme()
 {
-    // Create dark theme brushes
-    hBrushDarkBg = CreateSolidBrush(COLOR_DARK_BG);
-    hBrushDarkerBg = CreateSolidBrush(COLOR_DARKER_BG);
+    // Create light theme brushes
+    hBrushDarkBg = CreateSolidBrush(COLOR_BG);
+    hBrushDarkerBg = CreateSolidBrush(COLOR_EDIT_BG);
     hBrushDropZone = CreateSolidBrush(COLOR_DROPZONE);
     
     // Create border pen
     hPenBorder = CreatePen(PS_SOLID, 1, COLOR_BORDER);
     
     // Create UI font (Segoe UI for modern look)
-    hFontUI = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+hFontUI = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
         ANTIALIASED_QUALITY, VARIABLE_PITCH, L"Segoe UI");
 }
@@ -385,8 +386,8 @@ void CleanupDarkTheme()
 //
 void SetWindowTheme(HWND hwnd)
 {
-    // Set dark background
-    SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND, (LONG_PTR)hBrushDarkBg);
+    // Set light background
+    SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND, (LONG_PTR)CreateSolidBrush(COLOR_BG));
 }
 
 //
