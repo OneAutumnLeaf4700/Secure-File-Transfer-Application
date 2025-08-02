@@ -29,7 +29,6 @@ WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 
 // GUI Control Handles
 HWND hMainWindow;
-HWND hToolbar;
 HWND hStatusBar;
 HWND hEditServer, hEditPort, hEditUsername, hEditPassword;
 HWND hBtnConnect, hBtnDisconnect;
@@ -166,7 +165,6 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
    // Create all GUI components
    CreateMenuBar(hWnd);
-   CreateToolbar(hWnd);
    CreateControls(hWnd);
    CreateStatusBar(hWnd);
 
@@ -307,10 +305,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         
     case WM_SIZE:
         {
-            // Auto-resize toolbar and status bar
-            if (hToolbar) {
-                SendMessage(hToolbar, TB_AUTOSIZE, 0, 0);
-            }
+            // Auto-resize components
             if (hStatusBar) {
                 SendMessage(hStatusBar, WM_SIZE, wParam, lParam);
             }
@@ -432,35 +427,6 @@ void CreateMenuBar(HWND hWnd)
 }
 
 //
-//  FUNCTION: CreateToolbar()
-//  PURPOSE: Create the modern toolbar
-//
-void CreateToolbar(HWND hWnd)
-{
-    hToolbar = CreateWindowEx(0, TOOLBARCLASSNAME, NULL,
-        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST,
-        0, 0, 0, 0, hWnd, NULL, hInst, NULL);
-    
-    // Set toolbar font
-    SendMessage(hToolbar, WM_SETFONT, (WPARAM)hFontUI, MAKELPARAM(TRUE, 0));
-    
-    // Define toolbar buttons
-    TBBUTTON tbButtons[] = {
-        {0, IDM_FILE_CONNECT, TBSTATE_ENABLED, TBSTYLE_BUTTON, {0}, 0, (INT_PTR)L"Connect"},
-        {1, IDM_FILE_DISCONNECT, TBSTATE_ENABLED, TBSTYLE_BUTTON, {0}, 0, (INT_PTR)L"Disconnect"},
-        {0, 0, 0, TBSTYLE_SEP, {0}, 0, 0},
-        {2, ID_TOOLBAR_UPLOAD, TBSTATE_ENABLED, TBSTYLE_BUTTON, {0}, 0, (INT_PTR)L"Upload"},
-        {3, ID_TOOLBAR_DOWNLOAD, TBSTATE_ENABLED, TBSTYLE_BUTTON, {0}, 0, (INT_PTR)L"Download"},
-        {0, 0, 0, TBSTYLE_SEP, {0}, 0, 0},
-        {4, ID_TOOLBAR_REFRESH, TBSTATE_ENABLED, TBSTYLE_BUTTON, {0}, 0, (INT_PTR)L"Refresh"}
-    };
-    
-    SendMessage(hToolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-    SendMessage(hToolbar, TB_ADDBUTTONS, sizeof(tbButtons) / sizeof(TBBUTTON), (LPARAM)tbButtons);
-    SendMessage(hToolbar, TB_AUTOSIZE, 0, 0);
-}
-
-//
 //  FUNCTION: CreateStatusBar()
 //  PURPOSE: Create the status bar
 //
@@ -486,7 +452,7 @@ void CreateControls(HWND hWnd)
     RECT clientRect;
     GetClientRect(hWnd, &clientRect);
     
-    int toolbarHeight = 40;
+    int toolbarHeight = 0;
     int statusBarHeight = 25;
     int workAreaHeight = clientRect.bottom - toolbarHeight - statusBarHeight;
     
