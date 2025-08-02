@@ -29,6 +29,9 @@ struct FileTransferItem {
     bool needsCompression;
 };
 
+// Global storage for file transfer items to maintain full paths
+std::vector<FileTransferItem> g_fileTransferQueue;
+
 // Modern light theme colors
 #define COLOR_BG             RGB(250, 250, 250)   // Light gray background
 #define COLOR_PANEL          RGB(240, 240, 245)   // Panel background
