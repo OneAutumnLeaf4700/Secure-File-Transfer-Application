@@ -82,6 +82,7 @@ void                SetWindowTheme(HWND hwnd);
 std::wstring        FormatFileSize(LONGLONG size);
 LONGLONG            GetFileSize(const std::wstring& filePath);
 void                ProcessDroppedFiles(HWND hWnd, HDROP hDrop);
+void                ProcessSelectedFiles(HWND hWnd, WCHAR* fileBuffer, WORD fileOffset);
 void                AddFileToList(const FileTransferItem& item);
 bool                ShouldCompressFile(LONGLONG fileSize);
 INT_PTR CALLBACK    FileProcessingDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
@@ -238,22 +239,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 case IDC_DROPZONE:
                     {
                         OPENFILENAME ofn;
-                        WCHAR szFile[260] = { 0 };
+                        WCHAR szFile[32768] = { 0 }; // Large buffer for multiple files
                         
                         ZeroMemory(&ofn, sizeof(ofn));
                         ofn.lStructSize = sizeof(ofn);
                         ofn.hwndOwner = hWnd;
                         ofn.lpstrFile = szFile;
-                        ofn.nMaxFile = sizeof(szFile);
-                        ofn.lpstrFilter = L"All Files\0*.*\0";
+                        ofn.nMaxFile = sizeof(szFile) / sizeof(WCHAR);
+                        ofn.lpstrFilter = L"All Files\0*.*\0Text Files\0*.txt\0Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.gif\0Document Files\0*.doc;*.docx;*.pdf;*.rtf\0";
                         ofn.nFilterIndex = 1;
                         ofn.lpstrFileTitle = NULL;
                         ofn.nMaxFileTitle = 0;
                         ofn.lpstrInitialDir = NULL;
-                        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
                         
                         if (GetOpenFileName(&ofn)) {
-                            MessageBox(hWnd, szFile, L"File Selected", MB_OK | MB_ICONINFORMATION);
+                            ProcessSelectedFiles(hWnd, szFile, ofn.nFileOffset);
                         }
                     }
                     break;
@@ -836,6 +837,132 @@ void ProcessDroppedFiles(HWND hWnd, HDROP hDrop)
     } else {
         // Single small file - add directly
         AddFileToList(droppedFiles[0]);
+        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"File added to transfer queue");
+    }
+}
+
+//
+//  FUNCTION: ProcessSelectedFiles()
+//  PURPOSE: Process files selected from file browser dialog
+//
+void ProcessSelectedFiles(HWND hWnd, WCHAR* fileBuffer, WORD fileOffset)
+{
+    std::vector<FileTransferItem> selectedFiles;
+    LONGLONG totalSize = 0;
+    
+    if (fileOffset == 0) {
+        // Single file selected - the entire buffer is just the file path
+        FileTransferItem item;
+        item.filePath = fileBuffer;
+        
+        // Extract filename from path
+        wchar_t* fileName = PathFindFileName(fileBuffer);
+        item.fileName = fileName;
+        
+        // Get file size
+        item.fileSize = GetFileSize(fileBuffer);
+        item.needsCompression = ShouldCompressFile(item.fileSize);
+        
+        selectedFiles.push_back(item);
+        totalSize += item.fileSize;
+    } else {
+        // Multiple files selected - format is: "directory\0file1\0file2\0...\0\0"
+        std::wstring directory(fileBuffer);
+        WCHAR* fileName = fileBuffer + fileOffset;
+        
+        while (*fileName) {
+            FileTransferItem item;
+            
+            // Construct full path
+            item.filePath = directory + L"\\" + fileName;
+            item.fileName = fileName;
+            
+            // Get file size
+            item.fileSize = GetFileSize(item.filePath);
+            item.needsCompression = ShouldCompressFile(item.fileSize);
+            
+            selectedFiles.push_back(item);
+            totalSize += item.fileSize;
+            
+            // Move to next filename
+            fileName += wcslen(fileName) + 1;
+        }
+    }
+    
+    if (selectedFiles.empty()) {
+        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"No valid files were selected.");
+        return;
+    }
+    
+    UINT fileCount = (UINT)selectedFiles.size();
+    
+    // Update status bar
+    wchar_t statusMsg[256];
+    swprintf_s(statusMsg, L"Selected %d file(s) - Total size: %s", 
+               fileCount, FormatFileSize(totalSize).c_str());
+    SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)statusMsg);
+    
+    // Check if any files need compression
+    bool hasLargeFiles = false;
+    for (const auto& item : selectedFiles) {
+        if (item.needsCompression) {
+            hasLargeFiles = true;
+            break;
+        }
+    }
+    
+    // Show processing dialog if there are large files or multiple files
+    if (hasLargeFiles || fileCount > 1) {
+        wchar_t message[512];
+        if (hasLargeFiles && fileCount > 1) {
+            swprintf_s(message, L"You've selected %d files (Total: %s).\n\n"
+                       L"Some files are large and may benefit from compression.\n\n"
+                       L"Options:\n"
+                       L"• Transfer files as-is\n"
+                       L"• Compress large files individually\n"
+                       L"• Compress all files into a single archive",
+                       fileCount, FormatFileSize(totalSize).c_str());
+        } else if (hasLargeFiles) {
+            swprintf_s(message, L"Large file selected: %s (%s)\n\n"
+                       L"Would you like to compress this file before transfer?",
+                       selectedFiles[0].fileName.c_str(), 
+                       FormatFileSize(selectedFiles[0].fileSize).c_str());
+        } else {
+            swprintf_s(message, L"Multiple files selected (%d files, %s).\n\n"
+                       L"Would you like to compress them into a single archive?",
+                       fileCount, FormatFileSize(totalSize).c_str());
+        }
+        
+        int result = MessageBox(hWnd, message, L"File Processing Options", 
+                               MB_YESNOCANCEL | MB_ICONQUESTION);
+        
+        switch (result) {
+        case IDYES:
+            // User wants compression - for now, just add files to list
+            for (const auto& item : selectedFiles) {
+                AddFileToList(item);
+            }
+            SendMessage(hStatusBar, SB_SETTEXT, 0, 
+                       (LPARAM)L"Files added to transfer queue (compression will be implemented)");
+            break;
+            
+        case IDNO:
+            // Transfer as-is
+            for (auto& item : selectedFiles) {
+                item.needsCompression = false;
+                AddFileToList(item);
+            }
+            SendMessage(hStatusBar, SB_SETTEXT, 0, 
+                       (LPARAM)L"Files added to transfer queue (no compression)");
+            break;
+            
+        case IDCANCEL:
+            SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"File selection cancelled");
+            return;
+        }
+    } else {
+        // Single small file - add directly
+        AddFileToList(selectedFiles[0]);
         SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"File added to transfer queue");
     }
 }
