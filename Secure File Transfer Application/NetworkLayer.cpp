@@ -149,3 +149,318 @@ std::string NetworkLayer::WStringToString(const std::wstring &wstr) {
 std::wstring NetworkLayer::StringToWString(const std::string &str) {
     return std::wstring(str.begin(), str.end());
 }
+
+//
+// SFTP Directory Operations
+//
+std::vector<RemoteFileInfo> NetworkLayer::ListDirectory(const std::string& remotePath) {
+    std::vector<RemoteFileInfo> fileList;
+    
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return fileList;
+    }
+    
+    UpdateStatus(L"Listing remote directory...");
+    
+    LIBSSH2_SFTP_HANDLE* sftpHandle = libssh2_sftp_opendir(m_sftpSession, remotePath.c_str());
+    if (!sftpHandle) {
+        m_lastError = "Failed to open remote directory: " + remotePath;
+        UpdateStatus(L"Failed to list directory");
+        return fileList;
+    }
+    
+    char buffer[512];
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    
+    while (libssh2_sftp_readdir(sftpHandle, buffer, sizeof(buffer), &attrs) > 0) {
+        std::string fileName(buffer);
+        
+        // Skip current and parent directory entries
+        if (fileName == "." || fileName == "..") {
+            continue;
+        }
+        
+        RemoteFileInfo fileInfo;
+        fileInfo.fileName = StringToWString(fileName);
+        fileInfo.fileSize = attrs.filesize;
+        fileInfo.isDirectory = (attrs.permissions & LIBSSH2_SFTP_S_IFDIR) != 0;
+        
+        // Format permissions
+        fileInfo.permissions = FormatPermissions(attrs.permissions);
+        
+        // Format last modified time
+        fileInfo.lastModified = FormatTime(attrs.mtime);
+        
+        fileList.push_back(fileInfo);
+    }
+    
+    libssh2_sftp_closedir(sftpHandle);
+    
+    UpdateStatus(L"Directory listing complete");
+    return fileList;
+}
+
+bool NetworkLayer::CreateRemoteDirectory(const std::string& remotePath) {
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return false;
+    }
+    
+    int result = libssh2_sftp_mkdir(m_sftpSession, remotePath.c_str(), 
+                                   LIBSSH2_SFTP_S_IRWXU | LIBSSH2_SFTP_S_IRGRP | 
+                                   LIBSSH2_SFTP_S_IXGRP | LIBSSH2_SFTP_S_IROTH | 
+                                   LIBSSH2_SFTP_S_IXOTH);
+    
+    if (result != 0) {
+        m_lastError = "Failed to create directory: " + remotePath;
+        return false;
+    }
+    
+    return true;
+}
+
+bool NetworkLayer::RemoveRemoteDirectory(const std::string& remotePath) {
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return false;
+    }
+    
+    int result = libssh2_sftp_rmdir(m_sftpSession, remotePath.c_str());
+    
+    if (result != 0) {
+        m_lastError = "Failed to remove directory: " + remotePath;
+        return false;
+    }
+    
+    return true;
+}
+
+bool NetworkLayer::DeleteRemoteFile(const std::string& remoteFilePath) {
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return false;
+    }
+    
+    int result = libssh2_sftp_unlink(m_sftpSession, remoteFilePath.c_str());
+    
+    if (result != 0) {
+        m_lastError = "Failed to delete file: " + remoteFilePath;
+        return false;
+    }
+    
+    return true;
+}
+
+//
+// Helper functions for file information formatting
+//
+std::wstring NetworkLayer::FormatPermissions(unsigned long permissions) {
+    std::wstring result = L"";
+    
+    // File type
+    if (permissions & LIBSSH2_SFTP_S_IFDIR) result += L"d";
+    else if (permissions & LIBSSH2_SFTP_S_IFLNK) result += L"l";
+    else result += L"-";
+    
+    // Owner permissions
+    result += (permissions & LIBSSH2_SFTP_S_IRUSR) ? L"r" : L"-";
+    result += (permissions & LIBSSH2_SFTP_S_IWUSR) ? L"w" : L"-";
+    result += (permissions & LIBSSH2_SFTP_S_IXUSR) ? L"x" : L"-";
+    
+    // Group permissions
+    result += (permissions & LIBSSH2_SFTP_S_IRGRP) ? L"r" : L"-";
+    result += (permissions & LIBSSH2_SFTP_S_IWGRP) ? L"w" : L"-";
+    result += (permissions & LIBSSH2_SFTP_S_IXGRP) ? L"x" : L"-";
+    
+    // Other permissions
+    result += (permissions & LIBSSH2_SFTP_S_IROTH) ? L"r" : L"-";
+    result += (permissions & LIBSSH2_SFTP_S_IWOTH) ? L"w" : L"-";
+    result += (permissions & LIBSSH2_SFTP_S_IXOTH) ? L"x" : L"-";
+    
+    return result;
+}
+
+std::wstring NetworkLayer::FormatTime(unsigned long timestamp) {
+    if (timestamp == 0) {
+        return L"Unknown";
+    }
+    
+    time_t rawTime = static_cast<time_t>(timestamp);
+    struct tm timeInfo;
+    
+    if (localtime_s(&timeInfo, &rawTime) != 0) {
+        return L"Invalid";
+    }
+    
+    wchar_t buffer[64];
+    if (wcsftime(buffer, sizeof(buffer) / sizeof(wchar_t), L"%Y-%m-%d %H:%M", &timeInfo) == 0) {
+        return L"Error";
+    }
+    
+    return std::wstring(buffer);
+}
+
+//
+// File Transfer Operations
+//
+bool NetworkLayer::UploadFile(const std::wstring& localFilePath, const std::string& remoteFilePath, ProgressCallback progressCallback) {
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return false;
+    }
+    
+    // Convert wide string to string for file operations
+    std::string localFilePathA = WStringToString(localFilePath);
+    
+    // Open local file for reading
+    FILE* localFile = nullptr;
+    errno_t err = fopen_s(&localFile, localFilePathA.c_str(), "rb");
+    if (err != 0 || !localFile) {
+        m_lastError = "Failed to open local file: " + localFilePathA;
+        return false;
+    }
+    
+    // Get file size
+    fseek(localFile, 0, SEEK_END);
+    long long fileSize = ftell(localFile);
+    fseek(localFile, 0, SEEK_SET);
+    
+    // Open remote file for writing
+    LIBSSH2_SFTP_HANDLE* sftpHandle = libssh2_sftp_open(m_sftpSession, remoteFilePath.c_str(),
+                                                         LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC,
+                                                         LIBSSH2_SFTP_S_IRUSR | LIBSSH2_SFTP_S_IWUSR |
+                                                         LIBSSH2_SFTP_S_IRGRP | LIBSSH2_SFTP_S_IROTH);
+    if (!sftpHandle) {
+        fclose(localFile);
+        m_lastError = "Failed to create remote file: " + remoteFilePath;
+        return false;
+    }
+    
+    UpdateStatus(L"Uploading file...");
+    
+    // Transfer file in chunks
+    char buffer[BUFFER_SIZE];
+    long long totalTransferred = 0;
+    bool success = true;
+    
+    while (!feof(localFile)) {
+        size_t bytesRead = fread(buffer, 1, sizeof(buffer), localFile);
+        if (bytesRead == 0) break;
+        
+        size_t bytesWritten = 0;
+        while (bytesWritten < bytesRead) {
+            ssize_t result = libssh2_sftp_write(sftpHandle, buffer + bytesWritten, bytesRead - bytesWritten);
+            if (result < 0) {
+                success = false;
+                m_lastError = "Failed to write to remote file";
+                break;
+            }
+            bytesWritten += result;
+        }
+        
+        if (!success) break;
+        
+        totalTransferred += bytesRead;
+        
+        // Update progress
+        if (progressCallback) {
+            progressCallback(totalTransferred, fileSize);
+        }
+    }
+    
+    // Cleanup
+    fclose(localFile);
+    libssh2_sftp_close(sftpHandle);
+    
+    if (success) {
+        UpdateStatus(L"File upload completed");
+    } else {
+        UpdateStatus(L"File upload failed");
+    }
+    
+    return success;
+}
+
+bool NetworkLayer::DownloadFile(const std::string& remoteFilePath, const std::wstring& localFilePath, ProgressCallback progressCallback) {
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return false;
+    }
+    
+    // Open remote file for reading
+    LIBSSH2_SFTP_HANDLE* sftpHandle = libssh2_sftp_open(m_sftpSession, remoteFilePath.c_str(),
+                                                         LIBSSH2_FXF_READ, 0);
+    if (!sftpHandle) {
+        m_lastError = "Failed to open remote file: " + remoteFilePath;
+        return false;
+    }
+    
+    // Get remote file size
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    if (libssh2_sftp_fstat(sftpHandle, &attrs) != 0) {
+        libssh2_sftp_close(sftpHandle);
+        m_lastError = "Failed to get remote file attributes";
+        return false;
+    }
+    
+    long long fileSize = attrs.filesize;
+    
+    // Convert wide string to string for file operations
+    std::string localFilePathA = WStringToString(localFilePath);
+    
+    // Open local file for writing
+    FILE* localFile = nullptr;
+    errno_t err = fopen_s(&localFile, localFilePathA.c_str(), "wb");
+    if (err != 0 || !localFile) {
+        libssh2_sftp_close(sftpHandle);
+        m_lastError = "Failed to create local file: " + localFilePathA;
+        return false;
+    }
+    
+    UpdateStatus(L"Downloading file...");
+    
+    // Transfer file in chunks
+    char buffer[BUFFER_SIZE];
+    long long totalTransferred = 0;
+    bool success = true;
+    
+    while (totalTransferred < fileSize) {
+        ssize_t bytesRead = libssh2_sftp_read(sftpHandle, buffer, sizeof(buffer));
+        if (bytesRead < 0) {
+            success = false;
+            m_lastError = "Failed to read from remote file";
+            break;
+        }
+        
+        if (bytesRead == 0) break; // End of file
+        
+        size_t bytesWritten = fwrite(buffer, 1, bytesRead, localFile);
+        if (bytesWritten != (size_t)bytesRead) {
+            success = false;
+            m_lastError = "Failed to write to local file";
+            break;
+        }
+        
+        totalTransferred += bytesRead;
+        
+        // Update progress
+        if (progressCallback) {
+            progressCallback(totalTransferred, fileSize);
+        }
+    }
+    
+    // Cleanup
+    fclose(localFile);
+    libssh2_sftp_close(sftpHandle);
+    
+    if (success) {
+        UpdateStatus(L"File download completed");
+    } else {
+        UpdateStatus(L"File download failed");
+        // Delete incomplete local file
+        _wremove(localFilePath.c_str());
+    }
+    
+    return success;
+}

@@ -59,15 +59,15 @@ public:
 
     // Directory operations
     std::vector<RemoteFileInfo> ListDirectory(const std::string& remotePath = ".");
-    bool CreateDirectory(const std::string& remotePath);
-    bool RemoveDirectory(const std::string& remotePath);
+    bool CreateRemoteDirectory(const std::string& remotePath);
+    bool RemoveRemoteDirectory(const std::string& remotePath);
 
     // File operations
     bool UploadFile(const std::wstring& localFilePath, const std::string& remoteFilePath, 
                    ProgressCallback progressCallback = nullptr);
     bool DownloadFile(const std::string& remoteFilePath, const std::wstring& localFilePath,
                      ProgressCallback progressCallback = nullptr);
-    bool DeleteFile(const std::string& remoteFilePath);
+    bool DeleteRemoteFile(const std::string& remoteFilePath);
 
     // Utility functions
     std::string GetLastError() const;
@@ -86,6 +86,8 @@ private:
     void UpdateStatus(const std::wstring& status);
     std::string WStringToString(const std::wstring& wstr);
     std::wstring StringToWString(const std::string& str);
+    std::wstring FormatPermissions(unsigned long permissions);
+    std::wstring FormatTime(unsigned long timestamp);
 
     // Member variables
     LIBSSH2_SESSION* m_session;

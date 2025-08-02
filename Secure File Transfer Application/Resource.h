@@ -41,8 +41,10 @@
 #define IDC_LABEL_PORT				312
 #define IDC_LABEL_USERNAME			313
 #define IDC_LABEL_PASSWORD			314
-#define IDC_LABEL_LOCAL				315
+#define IDC_LABEL_LOCAL			315
 #define IDC_LABEL_REMOTE			316
+#define IDC_BTN_UPLOAD				317
+#define IDC_BTN_DOWNLOAD			318
 
 // Legacy IDs
 #define IDM_ABOUT				104
