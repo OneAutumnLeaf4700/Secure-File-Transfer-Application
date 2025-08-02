@@ -24,6 +24,8 @@
     <ProjectGuid>{9f37d7b7-f8b4-4e67-b414-448e8ee910ed}</ProjectGuid>
     <RootNamespace>SecureFileTransferApplication</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <VcpkgTriplet Condition="'$(Platform)' == 'Win32'">x86-windows</VcpkgTriplet>
+    <VcpkgTriplet Condition="'$(Platform)' == 'x64'">x64-windows</VcpkgTriplet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -124,11 +126,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
+    <ClInclude Include="NetworkLayer.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="Secure File Transfer Application.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="NetworkLayer.cpp" />
     <ClCompile Include="Secure File Transfer Application.cpp" />
   </ItemGroup>
   <ItemGroup>

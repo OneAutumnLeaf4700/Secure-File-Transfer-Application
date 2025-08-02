@@ -3,6 +3,7 @@
 
 #include "framework.h"
 #include "Secure File Transfer Application.h"
+#include "NetworkLayer.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
@@ -53,6 +54,7 @@ HWND hListLocal, hListRemote;
 HWND hProgress;
 HWND hLabelServer, hLabelPort, hLabelUsername, hLabelPassword;
 HWND hLabelLocal, hLabelRemote;
+HWND hBtnUpload, hBtnDownload;
 
 // Dark theme brushes
 HBRUSH hBrushDarkBg, hBrushDarkerBg, hBrushDropZone;
@@ -61,6 +63,10 @@ HFONT hFontUI;
 
 // Connection state
 bool isConnected = false;
+std::string currentRemotePath = "."; // Track current remote directory
+
+// Network layer instance
+std::unique_ptr<NetworkLayer> networkLayer;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -77,6 +83,11 @@ void                CleanupDarkTheme();
 void                UpdateConnectionState();
 void                SetWindowTheme(HWND hwnd);
 
+// Remote directory functions
+void                LoadRemoteDirectory(const std::string& remotePath = ".");
+void                AddRemoteFileToList(const RemoteFileInfo& fileInfo);
+std::string         GetCurrentRemotePath();
+
 // File handling functions
 std::wstring        FormatFileSize(LONGLONG size);
 LONGLONG            GetFileSize(const std::wstring& filePath);
@@ -85,6 +96,12 @@ void                ProcessSelectedFiles(HWND hWnd, WCHAR* fileBuffer, WORD file
 void                AddFileToList(const FileTransferItem& item);
 bool                ShouldCompressFile(LONGLONG fileSize);
 INT_PTR CALLBACK    FileProcessingDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+
+// File transfer functions
+void                UploadSelectedFiles();
+void                DownloadSelectedFiles();
+void                UpdateProgress(long long bytesTransferred, long long totalBytes);
+void                ShowContextMenu(HWND hWnd, int x, int y, bool isRemote);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -225,14 +242,82 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (wmEvent == BN_CLICKED) {
                 switch (wmId) {
                 case IDC_BTN_CONNECT:
-                    isConnected = true;
-                    UpdateConnectionState();
-                    MessageBox(hWnd, L"Connect button clicked! (Functionality not implemented yet)", L"Debug", MB_OK | MB_ICONINFORMATION);
+                    {
+                        // Get connection parameters from UI
+                        wchar_t server[256], port[16], username[256], password[256];
+                        GetWindowText(hEditServer, server, 256);
+                        GetWindowText(hEditPort, port, 16);
+                        GetWindowText(hEditUsername, username, 256);
+                        GetWindowText(hEditPassword, password, 256);
+                        
+                        // Convert to strings
+                        std::string serverStr(server, server + wcslen(server));
+                        std::string usernameStr(username, username + wcslen(username));
+                        std::string passwordStr(password, password + wcslen(password));
+                        int portNum = _wtoi(port);
+                        
+                        if (serverStr.empty() || usernameStr.empty() || portNum <= 0) {
+                            MessageBox(hWnd, L"Please fill in all connection fields.", L"Connection Error", MB_OK | MB_ICONWARNING);
+                            break;
+                        }
+                        
+                        // Create network layer if it doesn't exist
+                        if (!networkLayer) {
+                            networkLayer = std::make_unique<NetworkLayer>();
+                            networkLayer->SetStatusCallback([](const std::wstring& status) {
+                                SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)status.c_str());
+                            });
+                        }
+                        
+                        // Update status
+                        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Connecting...");
+                        
+                        // Attempt connection
+                        ConnectionResult result = networkLayer->Connect(serverStr, portNum, usernameStr, passwordStr);
+                        
+                        switch (result) {
+                        case ConnectionResult::Success:
+                            isConnected = true;
+                            UpdateConnectionState();
+                            
+                            // Load remote directory listing
+                            LoadRemoteDirectory();
+                            
+                            MessageBox(hWnd, L"Successfully connected to server!", L"Connection Success", MB_OK | MB_ICONINFORMATION);
+                            break;
+                        case ConnectionResult::NetworkError:
+                            MessageBox(hWnd, L"Network error occurred during connection.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        case ConnectionResult::AuthenticationFailed:
+                            MessageBox(hWnd, L"Authentication failed. Please check your credentials.", L"Authentication Error", MB_OK | MB_ICONERROR);
+                            break;
+                        case ConnectionResult::HostUnreachable:
+                            MessageBox(hWnd, L"Cannot reach the specified host. Please check the server address and port.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        case ConnectionResult::ConnectionTimeout:
+                            MessageBox(hWnd, L"Connection timed out. Please try again.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        default:
+                            MessageBox(hWnd, L"Unknown error occurred during connection.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        }
+                        
+                        if (result != ConnectionResult::Success) {
+                            SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Connection failed");
+                        }
+                    }
                     break;
                 case IDC_BTN_DISCONNECT:
-                    isConnected = false;
-                    UpdateConnectionState();
-                    MessageBox(hWnd, L"Disconnect button clicked! (Functionality not implemented yet)", L"Debug", MB_OK | MB_ICONINFORMATION);
+                    if (networkLayer && networkLayer->IsConnected()) {
+                        networkLayer->Disconnect();
+                        isConnected = false;
+                        UpdateConnectionState();
+                        
+                        // Clear remote file list
+                        ListView_DeleteAllItems(hListRemote);
+                        
+                        MessageBox(hWnd, L"Disconnected from server.", L"Disconnection", MB_OK | MB_ICONINFORMATION);
+                    }
                     break;
                 case IDC_DROPZONE:
                     {
@@ -255,6 +340,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                             ProcessSelectedFiles(hWnd, szFile, ofn.nFileOffset);
                         }
                     }
+                    break;
+                case IDC_BTN_UPLOAD:
+                    UploadSelectedFiles();
+                    break;
+                case IDC_BTN_DOWNLOAD:
+                    DownloadSelectedFiles();
                     break;
                 }
             }
@@ -333,6 +424,80 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             // Auto-resize components
             if (hStatusBar) {
                 SendMessage(hStatusBar, WM_SIZE, wParam, lParam);
+            }
+        }
+        break;
+        
+    case WM_NOTIFY:
+        {
+            LPNMHDR pnmh = (LPNMHDR)lParam;
+            
+            // Handle ListView notifications
+            if (pnmh->idFrom == IDC_LIST_REMOTE && pnmh->code == NM_DBLCLK) {
+                // Double-click on remote file list - navigate if it's a directory
+                LPNMITEMACTIVATE pnmia = (LPNMITEMACTIVATE)lParam;
+                
+                if (pnmia->iItem >= 0) {
+                    // Get the selected item's text
+                    wchar_t itemText[256];
+                    ListView_GetItemText(hListRemote, pnmia->iItem, 0, itemText, 256);
+                    
+                    std::wstring itemName(itemText);
+                    
+                    // Check if it's the parent directory entry
+                    if (itemName == L"[..]") {
+                        // Navigate to parent directory
+                        std::string newPath;
+                        if (currentRemotePath == "." || currentRemotePath.empty()) {
+                            newPath = ".";
+                        } else {
+                            // Find the last slash and remove everything after it
+                            size_t lastSlash = currentRemotePath.find_last_of('/');
+                            if (lastSlash != std::string::npos && lastSlash > 0) {
+                                newPath = currentRemotePath.substr(0, lastSlash);
+                            } else {
+                                newPath = ".";
+                            }
+                        }
+                        
+                        // Update current path and load directory
+                        currentRemotePath = newPath;
+                        LoadRemoteDirectory(currentRemotePath);
+                        
+                        // Update the remote files label to show current path
+                        std::wstring displayPath = (currentRemotePath == ".") ? L"/" : std::wstring(currentRemotePath.begin(), currentRemotePath.end());
+                        std::wstring labelText = L"Remote Files: " + displayPath;
+                        SetWindowText(hLabelRemote, labelText.c_str());
+                    }
+                    // Check if it's a directory (indicated by brackets)
+                    else if (itemName.length() > 2 && itemName[0] == L'[' && itemName.back() == L']') {
+                        // Extract directory name without brackets
+                        std::wstring dirName = itemName.substr(1, itemName.length() - 2);
+                        
+                        // Convert to std::string for path construction
+                        std::string dirNameA(dirName.begin(), dirName.end());
+                        
+                        // Construct new path
+                        std::string newPath;
+                        if (currentRemotePath == "." || currentRemotePath.empty()) {
+                            newPath = dirNameA;
+                        } else {
+                            newPath = currentRemotePath + "/" + dirNameA;
+                        }
+                        
+                        // Update current path and load directory
+                        currentRemotePath = newPath;
+                        LoadRemoteDirectory(currentRemotePath);
+                        
+                        // Update the remote files label to show current path
+                        std::wstring labelText = L"Remote Files: " + std::wstring(currentRemotePath.begin(), currentRemotePath.end());
+                        SetWindowText(hLabelRemote, labelText.c_str());
+                    }
+                }
+            }
+            else if (pnmh->idFrom == IDC_LIST_REMOTE && pnmh->code == NM_RCLICK) {
+                // Right-click on remote file list - show context menu
+                // TODO: Implement context menu for remote files
             }
         }
         break;
@@ -571,8 +736,20 @@ void CreateControls(HWND hWnd)
         WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL,
         40 + listWidth, listY, listWidth, 150, hWnd, (HMENU)IDC_LIST_REMOTE, hInst, NULL);
     
+    // Upload/Download buttons (between lists and progress bar)
+    int buttonY = listY + 160;
+    int buttonCenterX = clientRect.right / 2;
+    
+    hBtnUpload = CreateWindow(L"BUTTON", L"Upload Files →",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        buttonCenterX - 120, buttonY, 100, 30, hWnd, (HMENU)IDC_BTN_UPLOAD, hInst, NULL);
+    
+    hBtnDownload = CreateWindow(L"BUTTON", L"← Download File",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        buttonCenterX + 20, buttonY, 100, 30, hWnd, (HMENU)IDC_BTN_DOWNLOAD, hInst, NULL);
+    
     // Progress Bar (Bottom)
-    int progressY = listY + 160;
+    int progressY = buttonY + 40;
     
     hProgress = CreateWindow(PROGRESS_CLASS, NULL,
         WS_VISIBLE | WS_CHILD,
@@ -984,5 +1161,292 @@ void AddFileToList(const FileTransferItem& item)
         wchar_t* ext = PathFindExtension(item.fileName.c_str());
         std::wstring typeStr = ext && wcslen(ext) > 1 ? ext + 1 : L"File";
         ListView_SetItemText(hListLocal, index, 2, const_cast<LPWSTR>(typeStr.c_str()));
+    }
+}
+
+//
+//  FUNCTION: LoadRemoteDirectory()
+//  PURPOSE: Load and display remote directory contents
+//
+void LoadRemoteDirectory(const std::string& remotePath)
+{
+    if (!networkLayer || !networkLayer->IsConnected()) {
+        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Not connected to server");
+        return;
+    }
+    
+    // Clear existing remote file list
+    ListView_DeleteAllItems(hListRemote);
+    
+    // Update status
+    SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Loading remote directory...");
+    
+    // Add "Parent Directory" entry if we're not in the root directory
+    if (remotePath != "." && !remotePath.empty() && remotePath != "/") {
+        RemoteFileInfo parentDir;
+        parentDir.fileName = L"..";
+        parentDir.fileSize = 0;
+        parentDir.isDirectory = true;
+        parentDir.permissions = L"drwxr-xr-x";
+        parentDir.lastModified = L"";
+        AddRemoteFileToList(parentDir);
+    }
+    
+    // Get remote file listing
+    std::vector<RemoteFileInfo> fileList = networkLayer->ListDirectory(remotePath);
+    
+    if (fileList.empty() && (remotePath == "." || remotePath.empty() || remotePath == "/")) {
+        // Check if there was an error
+        std::string lastError = networkLayer->GetLastError();
+        if (!lastError.empty()) {
+            // Convert error to wide string and show it
+            std::wstring errorMsg = L"Error loading remote directory: " + 
+                                   std::wstring(lastError.begin(), lastError.end());
+            SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)errorMsg.c_str());
+            MessageBox(hMainWindow, errorMsg.c_str(), L"Remote Directory Error", MB_OK | MB_ICONERROR);
+        } else {
+            SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Remote directory is empty");
+        }
+        return;
+    }
+    
+    // Add each file to the remote files list
+    for (const auto& fileInfo : fileList) {
+        AddRemoteFileToList(fileInfo);
+    }
+    
+    // Update status with file count
+    wchar_t statusMsg[256];
+    int totalItems = (int)fileList.size();
+    if (remotePath != "." && !remotePath.empty() && remotePath != "/") {
+        totalItems += 1; // Count the parent directory entry
+    }
+    swprintf_s(statusMsg, L"Loaded %d items from remote directory", totalItems);
+    SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)statusMsg);
+}
+
+//
+//  FUNCTION: AddRemoteFileToList()
+//  PURPOSE: Add a remote file to the remote files ListView
+//
+void AddRemoteFileToList(const RemoteFileInfo& fileInfo)
+{
+    LVITEM lvi = { 0 };
+    lvi.mask = LVIF_TEXT;
+    lvi.iItem = ListView_GetItemCount(hListRemote);
+    lvi.iSubItem = 0;
+    
+    // Add directory indicator to filename if it's a directory
+    std::wstring displayName = fileInfo.fileName;
+    if (fileInfo.isDirectory) {
+        displayName = L"[" + fileInfo.fileName + L"]"; // Indicate directory with brackets
+    }
+    
+    lvi.pszText = const_cast<LPWSTR>(displayName.c_str());
+    
+    int index = ListView_InsertItem(hListRemote, &lvi);
+    
+    if (index >= 0) {
+        // Add file size (only for files, not directories)
+        std::wstring sizeStr;
+        if (fileInfo.isDirectory) {
+            sizeStr = L"<DIR>";
+        } else {
+            sizeStr = FormatFileSize(fileInfo.fileSize);
+        }
+        ListView_SetItemText(hListRemote, index, 1, const_cast<LPWSTR>(sizeStr.c_str()));
+        
+        // Add file type or permissions
+        std::wstring typeStr;
+        if (fileInfo.isDirectory) {
+            typeStr = L"Folder";
+        } else {
+            // Extract file extension for type
+            size_t dotPos = fileInfo.fileName.find_last_of(L'.');
+            if (dotPos != std::wstring::npos && dotPos < fileInfo.fileName.length() - 1) {
+                typeStr = fileInfo.fileName.substr(dotPos + 1);
+            } else {
+                typeStr = L"File";
+            }
+        }
+        ListView_SetItemText(hListRemote, index, 2, const_cast<LPWSTR>(typeStr.c_str()));
+    }
+}
+
+//
+//  FUNCTION: GetCurrentRemotePath()
+//  PURPOSE: Get the current remote directory path
+//
+std::string GetCurrentRemotePath()
+{
+    return currentRemotePath;
+}
+
+//
+//  FUNCTION: UpdateProgress()
+//  PURPOSE: Update progress bar with transfer progress
+//
+void UpdateProgress(long long bytesTransferred, long long totalBytes)
+{
+    if (totalBytes > 0) {
+        int percentage = (int)((bytesTransferred * 100) / totalBytes);
+        SendMessage(hProgress, PBM_SETPOS, percentage, 0);
+        
+        // Update status with progress info
+        std::wstring transferredStr = FormatFileSize(bytesTransferred);
+        std::wstring totalStr = FormatFileSize(totalBytes);
+        
+        wchar_t statusMsg[256];
+        swprintf_s(statusMsg, L"Transferring: %s / %s (%d%%)", 
+                   transferredStr.c_str(), totalStr.c_str(), percentage);
+        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)statusMsg);
+    }
+}
+
+//
+//  FUNCTION: UploadSelectedFiles()
+//  PURPOSE: Upload files from local ListView to remote server
+//
+void UploadSelectedFiles()
+{
+    if (!networkLayer || !networkLayer->IsConnected()) {
+        MessageBox(hMainWindow, L"Not connected to server.", L"Upload Error", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    
+    int itemCount = ListView_GetItemCount(hListLocal);
+    if (itemCount == 0) {
+        MessageBox(hMainWindow, L"No files to upload. Please add files to the local files list first.", L"Upload Error", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    
+    // Set progress bar range
+    SendMessage(hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+    SendMessage(hProgress, PBM_SETPOS, 0, 0);
+    
+    int successCount = 0;
+    int failureCount = 0;
+    
+    // Process each file in the local files list
+    for (int i = 0; i < itemCount; i++) {
+        wchar_t fileName[256];
+        ListView_GetItemText(hListLocal, i, 0, fileName, 256);
+        
+        // Get the full file path (stored in the item data or construct it)
+        // For now, we'll need to find the file path from the original dropped files
+        // This is a simplified approach - in a full implementation, we'd store the full path
+        
+        // Skip files that don't exist or can't be found
+        // For demo purposes, let's assume files are in current directory
+        std::wstring localPath = std::wstring(fileName);
+        std::string remotePath = currentRemotePath + "/" + std::string(fileName, fileName + wcslen(fileName));
+        
+        // Upload the file with progress callback
+        bool success = networkLayer->UploadFile(localPath, remotePath, UpdateProgress);
+        
+        if (success) {
+            successCount++;
+        } else {
+            failureCount++;
+            
+            // Show error for this file
+            std::string error = networkLayer->GetLastError();
+            std::wstring errorMsg = L"Failed to upload " + std::wstring(fileName) + L":\n" + 
+                                   std::wstring(error.begin(), error.end());
+            MessageBox(hMainWindow, errorMsg.c_str(), L"Upload Error", MB_OK | MB_ICONERROR);
+        }
+    }
+    
+    // Reset progress bar
+    SendMessage(hProgress, PBM_SETPOS, 0, 0);
+    
+    // Show summary
+    wchar_t summaryMsg[256];
+    swprintf_s(summaryMsg, L"Upload complete!\n\nSuccessful: %d\nFailed: %d", successCount, failureCount);
+    MessageBox(hMainWindow, summaryMsg, L"Upload Summary", MB_OK | MB_ICONINFORMATION);
+    
+    // Refresh remote directory to show uploaded files
+    if (successCount > 0) {
+        LoadRemoteDirectory(currentRemotePath);
+    }
+}
+
+//
+//  FUNCTION: DownloadSelectedFiles()
+//  PURPOSE: Download selected files from remote server to local directory
+//
+void DownloadSelectedFiles()
+{
+    if (!networkLayer || !networkLayer->IsConnected()) {
+        MessageBox(hMainWindow, L"Not connected to server.", L"Download Error", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    
+    // Get selected item from remote files list
+    int selectedItem = ListView_GetNextItem(hListRemote, -1, LVNI_SELECTED);
+    if (selectedItem == -1) {
+        MessageBox(hMainWindow, L"Please select a file from the remote files list to download.", L"Download Error", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    
+    // Get the selected file name
+    wchar_t itemText[256];
+    ListView_GetItemText(hListRemote, selectedItem, 0, itemText, 256);
+    
+    std::wstring itemName(itemText);
+    
+    // Skip directories
+    if (itemName.length() > 2 && itemName[0] == L'[' && itemName.back() == L']') {
+        MessageBox(hMainWindow, L"Cannot download directories. Please select a file.", L"Download Error", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    
+    // Ask user where to save the file
+    OPENFILENAME ofn;
+    wchar_t szFile[MAX_PATH] = { 0 };
+    wcscpy_s(szFile, itemName.c_str()); // Default filename
+    
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hMainWindow;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+    ofn.lpstrFilter = L"All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    
+    if (!GetSaveFileName(&ofn)) {
+        return; // User cancelled
+    }
+    
+    // Set progress bar range
+    SendMessage(hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+    SendMessage(hProgress, PBM_SETPOS, 0, 0);
+    
+    // Construct remote file path
+    std::string remoteFilePath;
+    if (currentRemotePath == ".") {
+        remoteFilePath = std::string(itemName.begin(), itemName.end());
+    } else {
+        remoteFilePath = currentRemotePath + "/" + std::string(itemName.begin(), itemName.end());
+    }
+    
+    std::wstring localFilePath = std::wstring(szFile);
+    
+    // Download the file with progress callback
+    bool success = networkLayer->DownloadFile(remoteFilePath, localFilePath, UpdateProgress);
+    
+    // Reset progress bar
+    SendMessage(hProgress, PBM_SETPOS, 0, 0);
+    
+    if (success) {
+        MessageBox(hMainWindow, L"File downloaded successfully!", L"Download Complete", MB_OK | MB_ICONINFORMATION);
+    } else {
+        std::string error = networkLayer->GetLastError();
+        std::wstring errorMsg = L"Failed to download file:\n" + std::wstring(error.begin(), error.end());
+        MessageBox(hMainWindow, errorMsg.c_str(), L"Download Error", MB_OK | MB_ICONERROR);
     }
 }
