@@ -712,14 +712,39 @@ std::wstring FormatFileSize(LONGLONG size)
 //
 LONGLONG GetFileSize(const std::wstring& filePath)
 {
+    // First try GetFileAttributesEx (faster, no handle needed)
     WIN32_FILE_ATTRIBUTE_DATA fileInfo;
     if (GetFileAttributesEx(filePath.c_str(), GetFileExInfoStandard, &fileInfo)) {
+        // Check if it's a directory
+        if (fileInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            return 0; // Directories have no size
+        }
+        
         LARGE_INTEGER fileSize;
         fileSize.HighPart = fileInfo.nFileSizeHigh;
         fileSize.LowPart = fileInfo.nFileSizeLow;
         return fileSize.QuadPart;
     }
-    return 0;
+    
+    // Fallback: try opening the file directly
+    HANDLE hFile = CreateFile(filePath.c_str(), 
+                             GENERIC_READ, 
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, 
+                             NULL, 
+                             OPEN_EXISTING, 
+                             FILE_ATTRIBUTE_NORMAL, 
+                             NULL);
+    
+    if (hFile != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER fileSize;
+        if (GetFileSizeEx(hFile, &fileSize)) {
+            CloseHandle(hFile);
+            return fileSize.QuadPart;
+        }
+        CloseHandle(hFile);
+    }
+    
+    return 0; // Could not get file size
 }
 
 //
@@ -853,14 +878,14 @@ void ProcessSelectedFiles(HWND hWnd, WCHAR* fileBuffer, WORD fileOffset)
     if (fileOffset == 0) {
         // Single file selected - the entire buffer is just the file path
         FileTransferItem item;
-        item.filePath = fileBuffer;
+        item.filePath = std::wstring(fileBuffer);
         
         // Extract filename from path
         wchar_t* fileName = PathFindFileName(fileBuffer);
-        item.fileName = fileName;
+        item.fileName = std::wstring(fileName);
         
         // Get file size
-        item.fileSize = GetFileSize(fileBuffer);
+        item.fileSize = GetFileSize(item.filePath);
         item.needsCompression = ShouldCompressFile(item.fileSize);
         
         selectedFiles.push_back(item);
@@ -874,8 +899,8 @@ void ProcessSelectedFiles(HWND hWnd, WCHAR* fileBuffer, WORD fileOffset)
             FileTransferItem item;
             
             // Construct full path
-            item.filePath = directory + L"\\" + fileName;
-            item.fileName = fileName;
+            item.filePath = directory + L"\\" + std::wstring(fileName);
+            item.fileName = std::wstring(fileName);
             
             // Get file size
             item.fileSize = GetFileSize(item.filePath);
