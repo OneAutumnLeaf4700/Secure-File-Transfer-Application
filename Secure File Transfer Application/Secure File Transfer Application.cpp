@@ -740,11 +740,11 @@ void CreateControls(HWND hWnd)
     int buttonY = listY + 160;
     int buttonCenterX = clientRect.right / 2;
     
-    hBtnUpload = CreateWindow(L"BUTTON", L"Upload Files →",
+    hBtnUpload = CreateWindow(L"BUTTON", L"Upload →",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         buttonCenterX - 120, buttonY, 100, 30, hWnd, (HMENU)IDC_BTN_UPLOAD, hInst, NULL);
     
-    hBtnDownload = CreateWindow(L"BUTTON", L"← Download File",
+    hBtnDownload = CreateWindow(L"BUTTON", L"← Download",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         buttonCenterX + 20, buttonY, 100, 30, hWnd, (HMENU)IDC_BTN_DOWNLOAD, hInst, NULL);
     
@@ -761,7 +761,8 @@ void CreateControls(HWND hWnd)
         hLabelServer, hEditServer, hLabelPort, hEditPort,
         hLabelUsername, hEditUsername, hLabelPassword, hEditPassword,
         hBtnConnect, hBtnDisconnect, hDropZone,
-        hLabelLocal, hLabelRemote, hListLocal, hListRemote
+        hLabelLocal, hLabelRemote, hListLocal, hListRemote,
+        hBtnUpload, hBtnDownload
     };
     
     for (int i = 0; i < sizeof(controls) / sizeof(HWND); i++) {
