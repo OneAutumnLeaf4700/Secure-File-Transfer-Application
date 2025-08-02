@@ -3,6 +3,7 @@
 
 #include "framework.h"
 #include "Secure File Transfer Application.h"
+#include "NetworkLayer.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
@@ -61,6 +62,9 @@ HFONT hFontUI;
 
 // Connection state
 bool isConnected = false;
+
+// Network layer instance
+std::unique_ptr<NetworkLayer> networkLayer;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -225,14 +229,78 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (wmEvent == BN_CLICKED) {
                 switch (wmId) {
                 case IDC_BTN_CONNECT:
-                    isConnected = true;
-                    UpdateConnectionState();
-                    MessageBox(hWnd, L"Connect button clicked! (Functionality not implemented yet)", L"Debug", MB_OK | MB_ICONINFORMATION);
+                    {
+                        // Get connection parameters from UI
+                        wchar_t server[256], port[16], username[256], password[256];
+                        GetWindowText(hEditServer, server, 256);
+                        GetWindowText(hEditPort, port, 16);
+                        GetWindowText(hEditUsername, username, 256);
+                        GetWindowText(hEditPassword, password, 256);
+                        
+                        // Convert to strings
+                        std::string serverStr(server, server + wcslen(server));
+                        std::string usernameStr(username, username + wcslen(username));
+                        std::string passwordStr(password, password + wcslen(password));
+                        int portNum = _wtoi(port);
+                        
+                        if (serverStr.empty() || usernameStr.empty() || portNum <= 0) {
+                            MessageBox(hWnd, L"Please fill in all connection fields.", L"Connection Error", MB_OK | MB_ICONWARNING);
+                            break;
+                        }
+                        
+                        // Create network layer if it doesn't exist
+                        if (!networkLayer) {
+                            networkLayer = std::make_unique<NetworkLayer>();
+                            networkLayer->SetStatusCallback([](const std::wstring& status) {
+                                SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)status.c_str());
+                            });
+                        }
+                        
+                        // Update status
+                        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Connecting...");
+                        
+                        // Attempt connection
+                        ConnectionResult result = networkLayer->Connect(serverStr, portNum, usernameStr, passwordStr);
+                        
+                        switch (result) {
+                        case ConnectionResult::Success:
+                            isConnected = true;
+                            UpdateConnectionState();
+                            MessageBox(hWnd, L"Successfully connected to server!", L"Connection Success", MB_OK | MB_ICONINFORMATION);
+                            break;
+                        case ConnectionResult::NetworkError:
+                            MessageBox(hWnd, L"Network error occurred during connection.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        case ConnectionResult::AuthenticationFailed:
+                            MessageBox(hWnd, L"Authentication failed. Please check your credentials.", L"Authentication Error", MB_OK | MB_ICONERROR);
+                            break;
+                        case ConnectionResult::HostUnreachable:
+                            MessageBox(hWnd, L"Cannot reach the specified host. Please check the server address and port.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        case ConnectionResult::ConnectionTimeout:
+                            MessageBox(hWnd, L"Connection timed out. Please try again.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        default:
+                            MessageBox(hWnd, L"Unknown error occurred during connection.", L"Connection Error", MB_OK | MB_ICONERROR);
+                            break;
+                        }
+                        
+                        if (result != ConnectionResult::Success) {
+                            SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Connection failed");
+                        }
+                    }
                     break;
                 case IDC_BTN_DISCONNECT:
-                    isConnected = false;
-                    UpdateConnectionState();
-                    MessageBox(hWnd, L"Disconnect button clicked! (Functionality not implemented yet)", L"Debug", MB_OK | MB_ICONINFORMATION);
+                    if (networkLayer && networkLayer->IsConnected()) {
+                        networkLayer->Disconnect();
+                        isConnected = false;
+                        UpdateConnectionState();
+                        
+                        // Clear remote file list
+                        ListView_DeleteAllItems(hListRemote);
+                        
+                        MessageBox(hWnd, L"Disconnected from server.", L"Disconnection", MB_OK | MB_ICONINFORMATION);
+                    }
                     break;
                 case IDC_DROPZONE:
                     {
