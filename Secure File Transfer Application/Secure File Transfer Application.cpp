@@ -6,11 +6,27 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <vector>
+#include <string>
+#include <shlwapi.h>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 #define MAX_LOADSTRING 100
+
+// File size constants (in bytes)
+#define SMALL_FILE_LIMIT    (50LL * 1024 * 1024)    // 50MB
+#define MEDIUM_FILE_LIMIT   (500LL * 1024 * 1024)   // 500MB
+
+// File transfer structure
+struct FileTransferItem {
+    std::wstring fileName;
+    std::wstring filePath;
+    LONGLONG fileSize;
+    bool needsCompression;
+};
 
 // Modern light theme colors
 #define COLOR_BG             RGB(250, 250, 250)   // Light gray background
@@ -61,6 +77,14 @@ void                InitializeDarkTheme();
 void                CleanupDarkTheme();
 void                UpdateConnectionState();
 void                SetWindowTheme(HWND hwnd);
+
+// File handling functions
+std::wstring        FormatFileSize(LONGLONG size);
+LONGLONG            GetFileSize(const std::wstring& filePath);
+void                ProcessDroppedFiles(HWND hWnd, HDROP hDrop);
+void                AddFileToList(const FileTransferItem& item);
+bool                ShouldCompressFile(LONGLONG fileSize);
+INT_PTR CALLBACK    FileProcessingDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -316,8 +340,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         break;
+        
+    case WM_DROPFILES:
+        {
+            HDROP hDrop = (HDROP)wParam;
+            ProcessDroppedFiles(hWnd, hDrop);
+            DragFinish(hDrop);
+        }
+        break;
 
     case WM_DESTROY:
+        DragAcceptFiles(hWnd, FALSE);
         PostQuitMessage(0);
         break;
     
@@ -546,6 +579,9 @@ void CreateControls(HWND hWnd)
         50, dropZoneY, clientRect.right - 100, dropZoneHeight,
         hWnd, (HMENU)IDC_DROPZONE, hInst, NULL);
     
+    // Enable drag and drop for the main window
+    DragAcceptFiles(hWnd, TRUE);
+    
     // File Lists (Bottom)
     int listY = dropZoneY + dropZoneHeight + 20;
     int listWidth = (clientRect.right - 80) / 2;
@@ -641,5 +677,194 @@ void UpdateConnectionState()
     if (hStatusBar) {
         const wchar_t* status = isConnected ? L"Connected" : L"Ready - Not Connected";
         SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)status);
+    }
+}
+
+//
+//  FUNCTION: FormatFileSize()
+//  PURPOSE: Format file size in human-readable format
+//
+std::wstring FormatFileSize(LONGLONG size)
+{
+    const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB", L"TB" };
+    int unitIndex = 0;
+    double dSize = (double)size;
+    
+    while (dSize >= 1024.0 && unitIndex < 4) {
+        dSize /= 1024.0;
+        unitIndex++;
+    }
+    
+    wchar_t buffer[64];
+    if (unitIndex == 0) {
+        swprintf_s(buffer, L"%.0f %s", dSize, units[unitIndex]);
+    } else {
+        swprintf_s(buffer, L"%.1f %s", dSize, units[unitIndex]);
+    }
+    
+    return std::wstring(buffer);
+}
+
+//
+//  FUNCTION: GetFileSize()
+//  PURPOSE: Get file size for a given file path
+//
+LONGLONG GetFileSize(const std::wstring& filePath)
+{
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesEx(filePath.c_str(), GetFileExInfoStandard, &fileInfo)) {
+        LARGE_INTEGER fileSize;
+        fileSize.HighPart = fileInfo.nFileSizeHigh;
+        fileSize.LowPart = fileInfo.nFileSizeLow;
+        return fileSize.QuadPart;
+    }
+    return 0;
+}
+
+//
+//  FUNCTION: ShouldCompressFile()
+//  PURPOSE: Determine if file should be compressed based on size
+//
+bool ShouldCompressFile(LONGLONG fileSize)
+{
+    return fileSize > SMALL_FILE_LIMIT;
+}
+
+//
+//  FUNCTION: ProcessDroppedFiles()
+//  PURPOSE: Process files dropped onto the window
+//
+void ProcessDroppedFiles(HWND hWnd, HDROP hDrop)
+{
+    UINT fileCount = DragQueryFile(hDrop, 0xFFFFFFFF, NULL, 0);
+    if (fileCount == 0) return;
+    
+    std::vector<FileTransferItem> droppedFiles;
+    LONGLONG totalSize = 0;
+    
+    // Process each dropped file
+    for (UINT i = 0; i < fileCount; i++) {
+        wchar_t filePath[MAX_PATH];
+        UINT pathLength = DragQueryFile(hDrop, i, filePath, MAX_PATH);
+        
+        if (pathLength > 0) {
+            FileTransferItem item;
+            item.filePath = filePath;
+            
+            // Extract filename from path
+            wchar_t* fileName = PathFindFileName(filePath);
+            item.fileName = fileName;
+            
+            // Get file size
+            item.fileSize = GetFileSize(filePath);
+            item.needsCompression = ShouldCompressFile(item.fileSize);
+            
+            droppedFiles.push_back(item);
+            totalSize += item.fileSize;
+        }
+    }
+    
+    if (droppedFiles.empty()) {
+        MessageBox(hWnd, L"No valid files were dropped.", L"Drag & Drop", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    
+    // Update status bar
+    wchar_t statusMsg[256];
+    swprintf_s(statusMsg, L"Processing %d file(s) - Total size: %s", 
+               fileCount, FormatFileSize(totalSize).c_str());
+    SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)statusMsg);
+    
+    // Check if any files need compression
+    bool hasLargeFiles = false;
+    for (const auto& item : droppedFiles) {
+        if (item.needsCompression) {
+            hasLargeFiles = true;
+            break;
+        }
+    }
+    
+    // Show processing dialog if there are large files or multiple files
+    if (hasLargeFiles || fileCount > 1) {
+        wchar_t message[512];
+        if (hasLargeFiles && fileCount > 1) {
+            swprintf_s(message, L"You've dropped %d files (Total: %s).\n\n"
+                       L"Some files are large and may benefit from compression.\n\n"
+                       L"Options:\n"
+                       L"• Transfer files as-is\n"
+                       L"• Compress large files individually\n"
+                       L"• Compress all files into a single archive",
+                       fileCount, FormatFileSize(totalSize).c_str());
+        } else if (hasLargeFiles) {
+            swprintf_s(message, L"Large file detected: %s (%s)\n\n"
+                       L"Would you like to compress this file before transfer?",
+                       droppedFiles[0].fileName.c_str(), 
+                       FormatFileSize(droppedFiles[0].fileSize).c_str());
+        } else {
+            swprintf_s(message, L"Multiple files dropped (%d files, %s).\n\n"
+                       L"Would you like to compress them into a single archive?",
+                       fileCount, FormatFileSize(totalSize).c_str());
+        }
+        
+        int result = MessageBox(hWnd, message, L"File Processing Options", 
+                               MB_YESNOCANCEL | MB_ICONQUESTION);
+        
+        switch (result) {
+        case IDYES:
+            // User wants compression - for now, just add files to list
+            for (const auto& item : droppedFiles) {
+                AddFileToList(item);
+            }
+            SendMessage(hStatusBar, SB_SETTEXT, 0, 
+                       (LPARAM)L"Files added to transfer queue (compression will be implemented)");
+            break;
+            
+        case IDNO:
+            // Transfer as-is
+            for (auto& item : droppedFiles) {
+                item.needsCompression = false;
+                AddFileToList(item);
+            }
+            SendMessage(hStatusBar, SB_SETTEXT, 0, 
+                       (LPARAM)L"Files added to transfer queue (no compression)");
+            break;
+            
+        case IDCANCEL:
+            SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"File drop cancelled");
+            return;
+        }
+    } else {
+        // Single small file - add directly
+        AddFileToList(droppedFiles[0]);
+        SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)L"File added to transfer queue");
+    }
+}
+
+//
+//  FUNCTION: AddFileToList()
+//  PURPOSE: Add file to the local files ListView
+//
+void AddFileToList(const FileTransferItem& item)
+{
+    LVITEM lvi = { 0 };
+    lvi.mask = LVIF_TEXT;
+    lvi.iItem = ListView_GetItemCount(hListLocal);
+    lvi.iSubItem = 0;
+    lvi.pszText = const_cast<LPWSTR>(item.fileName.c_str());
+    
+    int index = ListView_InsertItem(hListLocal, &lvi);
+    
+    if (index >= 0) {
+        // Add file size
+        std::wstring sizeStr = FormatFileSize(item.fileSize);
+        if (item.needsCompression) {
+            sizeStr += L" (compress)";
+        }
+        ListView_SetItemText(hListLocal, index, 1, const_cast<LPWSTR>(sizeStr.c_str()));
+        
+        // Add file type
+        wchar_t* ext = PathFindExtension(item.fileName.c_str());
+        std::wstring typeStr = ext && wcslen(ext) > 1 ? ext + 1 : L"File";
+        ListView_SetItemText(hListLocal, index, 2, const_cast<LPWSTR>(typeStr.c_str()));
     }
 }
