@@ -31,6 +31,7 @@ struct RemoteFileInfo {
 
 using ProgressCallback = std::function<void(long long bytesTransferred, long long totalBytes)>;
 using StatusCallback = std::function<void(const std::string& status)>;
+using TrustHostKeyCallback = std::function<bool(const std::string& hostname, const std::string& fingerprint)>;
 
 class NetworkLayer {
 public:
@@ -60,6 +61,7 @@ public:
 
     std::string GetLastError() const;
     void SetStatusCallback(StatusCallback callback);
+    void SetTrustHostKeyCallback(TrustHostKeyCallback callback);
 
 private:
     bool InitializeLibrary();
@@ -67,6 +69,9 @@ private:
 
     bool ConnectSocket(const std::string& hostname, int port);
     void CloseSocket();
+
+    ConnectionResult VerifyHostKey(const std::string& hostname, int port);
+    std::string ComputeHostKeyFingerprint() const;
 
     void UpdateStatus(const std::string& status);
     std::string FormatPermissions(unsigned long permissions);
@@ -79,6 +84,7 @@ private:
     bool m_libraryInitialized;
     std::string m_lastError;
     StatusCallback m_statusCallback;
+    TrustHostKeyCallback m_trustHostKeyCallback;
 
     static const int BUFFER_SIZE = 1024 * 16;
     static const int CONNECTION_TIMEOUT = 30;

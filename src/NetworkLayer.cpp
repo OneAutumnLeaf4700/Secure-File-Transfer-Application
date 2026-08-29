@@ -2,11 +2,14 @@
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <ctime>
+#include <cerrno>
 
 NetworkLayer::NetworkLayer() :
     m_session(nullptr),
@@ -22,35 +25,155 @@ NetworkLayer::~NetworkLayer() {
 
 ConnectionResult NetworkLayer::Connect(const std::string &hostname, int port,
                                        std::function<ConnectionResult()> authenticate) {
+    Disconnect();
+
+    m_lastError.clear();
+
     if (!InitializeLibrary()) {
+        m_lastError = "Failed to initialize libssh2";
         return ConnectionResult::UnknownError;
     }
 
     if (!ConnectSocket(hostname, port)) {
+        m_lastError = "Could not connect to " + hostname + ":" + std::to_string(port);
         return ConnectionResult::HostUnreachable;
     }
 
     m_session = libssh2_session_init();
     if (!m_session) {
+        m_lastError = "Failed to initialize SSH session";
         return ConnectionResult::UnknownError;
     }
 
     if (libssh2_session_handshake(m_session, m_socket)) {
+        m_lastError = "SSH handshake failed";
+        char* errMsg = nullptr;
+        int errLen = 0;
+        if (libssh2_session_last_error(m_session, &errMsg, &errLen, 0) != 0 && errMsg && errLen > 0) {
+            m_lastError += ": " + std::string(errMsg, errLen);
+        }
         return ConnectionResult::NetworkError;
+    }
+
+    ConnectionResult hostKeyResult = VerifyHostKey(hostname, port);
+    if (hostKeyResult != ConnectionResult::Success) {
+        return hostKeyResult;
     }
 
     ConnectionResult authResult = authenticate();
     if (authResult != ConnectionResult::Success) {
+        if (m_lastError.empty()) {
+            m_lastError = "Authentication failed";
+        }
         return authResult;
     }
 
     m_sftpSession = libssh2_sftp_init(m_session);
     if (!m_sftpSession) {
+        m_lastError = "Failed to initialize SFTP subsystem";
         return ConnectionResult::UnknownError;
     }
 
     m_connected = true;
     return ConnectionResult::Success;
+}
+
+ConnectionResult NetworkLayer::VerifyHostKey(const std::string& hostname, int port) {
+    LIBSSH2_KNOWNHOSTS* knownHosts = libssh2_knownhost_init(m_session);
+    if (!knownHosts) {
+        m_lastError = "Failed to initialize known_hosts collection";
+        return ConnectionResult::UnknownError;
+    }
+
+    const char* home = getenv("HOME");
+    std::string knownHostsPath;
+    if (home) {
+        knownHostsPath = std::string(home) + "/.ssh/known_hosts";
+        FILE* existing = fopen(knownHostsPath.c_str(), "r");
+        if (existing) {
+            fclose(existing);
+            libssh2_knownhost_readfile(knownHosts, knownHostsPath.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+        }
+    }
+
+    size_t keyLen = 0;
+    int keyType = 0;
+    const char* key = libssh2_session_hostkey(m_session, &keyLen, &keyType);
+    if (!key) {
+        libssh2_knownhost_free(knownHosts);
+        m_lastError = "Failed to retrieve server host key";
+        return ConnectionResult::UnknownError;
+    }
+
+    struct libssh2_knownhost* knownhost = nullptr;
+    int check = libssh2_knownhost_checkp(knownHosts, hostname.c_str(), port, key, keyLen,
+                                         LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW,
+                                         &knownhost);
+
+    ConnectionResult result = ConnectionResult::Success;
+
+    if (check == LIBSSH2_KNOWNHOST_CHECK_MATCH) {
+        // Host key matches the trusted entry; proceed silently.
+    } else if (check == LIBSSH2_KNOWNHOST_CHECK_MISMATCH) {
+        m_lastError = "WARNING: host key for " + hostname +
+                       " has changed! Possible man-in-the-middle attack. Connection aborted.";
+        result = ConnectionResult::AuthenticationFailed;
+    } else {
+        // NOTFOUND or FAILURE: first-time connection to this host (TOFU).
+        std::string fingerprint = ComputeHostKeyFingerprint();
+        bool trust = false;
+        if (m_trustHostKeyCallback) {
+            trust = m_trustHostKeyCallback(hostname, fingerprint);
+        }
+
+        if (trust) {
+            int keyTypeMask = LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW;
+            switch (keyType) {
+                case LIBSSH2_HOSTKEY_TYPE_RSA:        keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_SSHRSA; break;
+                case LIBSSH2_HOSTKEY_TYPE_DSS:        keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_SSHDSS; break;
+                case LIBSSH2_HOSTKEY_TYPE_ECDSA_256:  keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_ECDSA_256; break;
+                case LIBSSH2_HOSTKEY_TYPE_ECDSA_384:  keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_ECDSA_384; break;
+                case LIBSSH2_HOSTKEY_TYPE_ECDSA_521:  keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_ECDSA_521; break;
+                case LIBSSH2_HOSTKEY_TYPE_ED25519:    keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_ED25519; break;
+                default:                              keyTypeMask |= LIBSSH2_KNOWNHOST_KEY_UNKNOWN; break;
+            }
+
+            struct libssh2_knownhost* stored = nullptr;
+            libssh2_knownhost_addc(knownHosts, hostname.c_str(), nullptr, key, keyLen,
+                                   nullptr, 0, keyTypeMask, &stored);
+
+            if (home) {
+                std::string sshDir = std::string(home) + "/.ssh";
+                if (mkdir(sshDir.c_str(), 0700) != 0 && errno != EEXIST) {
+                    // Best effort; if the directory can't be created, writefile below will simply fail.
+                }
+                libssh2_knownhost_writefile(knownHosts, knownHostsPath.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+            }
+        } else {
+            m_lastError = "Host key verification declined by user for " + hostname;
+            result = ConnectionResult::AuthenticationFailed;
+        }
+    }
+
+    libssh2_knownhost_free(knownHosts);
+    return result;
+}
+
+std::string NetworkLayer::ComputeHostKeyFingerprint() const {
+    const char* hash = libssh2_hostkey_hash(m_session, LIBSSH2_HOSTKEY_HASH_SHA256);
+    if (!hash) {
+        return "unknown";
+    }
+
+    static const char hexDigits[] = "0123456789abcdef";
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(hash);
+    std::string fingerprint;
+    for (int i = 0; i < 32; ++i) {
+        if (i > 0) fingerprint += ':';
+        fingerprint += hexDigits[(bytes[i] >> 4) & 0xF];
+        fingerprint += hexDigits[bytes[i] & 0xF];
+    }
+    return fingerprint;
 }
 
 void NetworkLayer::Disconnect() {
@@ -156,6 +279,10 @@ std::string NetworkLayer::GetLastError() const {
 
 void NetworkLayer::SetStatusCallback(StatusCallback callback) {
     m_statusCallback = callback;
+}
+
+void NetworkLayer::SetTrustHostKeyCallback(TrustHostKeyCallback callback) {
+    m_trustHostKeyCallback = callback;
 }
 
 std::vector<RemoteFileInfo> NetworkLayer::ListDirectory(const std::string& remotePath) {
@@ -329,7 +456,13 @@ bool NetworkLayer::UploadFile(const std::string& localFilePath, const std::strin
 
     while (!feof(localFile)) {
         size_t bytesRead = fread(buffer, 1, sizeof(buffer), localFile);
-        if (bytesRead == 0) break;
+        if (bytesRead == 0) {
+            if (ferror(localFile)) {
+                success = false;
+                m_lastError = "Error reading local file: " + localFilePath;
+            }
+            break;
+        }
 
         size_t bytesWritten = 0;
         while (bytesWritten < bytesRead) {
@@ -420,6 +553,12 @@ bool NetworkLayer::DownloadFile(const std::string& remoteFilePath, const std::st
 
     fclose(localFile);
     libssh2_sftp_close(sftpHandle);
+
+    if (success && totalTransferred < fileSize) {
+        success = false;
+        m_lastError = "Incomplete transfer: got " + std::to_string(totalTransferred) +
+                       " of " + std::to_string(fileSize) + " bytes";
+    }
 
     if (success) {
         UpdateStatus("File download completed");

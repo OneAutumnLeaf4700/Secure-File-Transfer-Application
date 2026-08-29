@@ -79,6 +79,14 @@ int main(int argc, char** argv) {
     net.SetStatusCallback([](const std::string& status) {
         std::cerr << "[status] " << status << "\n";
     });
+    net.SetTrustHostKeyCallback([](const std::string& hostname, const std::string& fingerprint) {
+        std::cout << "The authenticity of host '" << hostname << "' can't be established.\n"
+                  << "Key fingerprint is " << fingerprint << ".\n"
+                  << "Are you sure you want to continue connecting (yes/no)? ";
+        std::string answer;
+        std::getline(std::cin, answer);
+        return answer == "yes" || answer == "y" || answer == "Y";
+    });
 
     ConnectionResult result;
     if (!args.keyfile.empty()) {
