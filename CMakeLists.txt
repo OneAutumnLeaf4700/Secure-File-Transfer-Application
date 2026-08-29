@@ -11,6 +11,7 @@ add_executable(sfta
     src/main.cpp
     src/NetworkLayer.cpp
     src/Session.cpp
+    src/Shell.cpp
 )
 
 target_include_directories(sfta PRIVATE ${LIBSSH2_INCLUDE_DIRS})
