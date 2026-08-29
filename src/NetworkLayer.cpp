@@ -87,12 +87,21 @@ ConnectionResult NetworkLayer::VerifyHostKey(const std::string& hostname, int po
 
     const char* home = getenv("HOME");
     std::string knownHostsPath;
+    bool knownHostsPartiallyParsed = false;
     if (home) {
         knownHostsPath = std::string(home) + "/.ssh/known_hosts";
         FILE* existing = fopen(knownHostsPath.c_str(), "r");
         if (existing) {
             fclose(existing);
-            libssh2_knownhost_readfile(knownHosts, knownHostsPath.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+            int readResult = libssh2_knownhost_readfile(knownHosts, knownHostsPath.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+            if (readResult < 0) {
+                // readfile stops at the first unparseable line, leaving the in-memory
+                // collection missing every entry after it. Persisting from this partial
+                // view would silently delete those entries from disk, so we must not
+                // write the file later even though we can still verify/prompt for the
+                // current host with whatever entries were loaded.
+                knownHostsPartiallyParsed = true;
+            }
         }
     }
 
@@ -143,11 +152,17 @@ ConnectionResult NetworkLayer::VerifyHostKey(const std::string& hostname, int po
                                    nullptr, 0, keyTypeMask, &stored);
 
             if (home) {
-                std::string sshDir = std::string(home) + "/.ssh";
-                if (mkdir(sshDir.c_str(), 0700) != 0 && errno != EEXIST) {
-                    // Best effort; if the directory can't be created, writefile below will simply fail.
+                if (knownHostsPartiallyParsed) {
+                    UpdateStatus("Warning: ~/.ssh/known_hosts contains an unparseable entry — "
+                                 "not saving new host key to avoid data loss. Please fix or "
+                                 "remove the malformed line, then reconnect to save trust for this host.");
+                } else {
+                    std::string sshDir = std::string(home) + "/.ssh";
+                    if (mkdir(sshDir.c_str(), 0700) != 0 && errno != EEXIST) {
+                        // Best effort; if the directory can't be created, writefile below will simply fail.
+                    }
+                    libssh2_knownhost_writefile(knownHosts, knownHostsPath.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
                 }
-                libssh2_knownhost_writefile(knownHosts, knownHostsPath.c_str(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
             }
         } else {
             m_lastError = "Host key verification declined by user for " + hostname;
