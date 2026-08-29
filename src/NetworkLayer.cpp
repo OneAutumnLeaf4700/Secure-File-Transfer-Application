@@ -21,6 +21,8 @@ NetworkLayer::~NetworkLayer() {
 }
 
 ConnectionResult NetworkLayer::Connect(const std::string &hostname, int port, const std::string &username, const std::string &password) {
+    Disconnect();
+
     if (!InitializeLibrary()) {
         return ConnectionResult::UnknownError;
     }
