@@ -20,9 +20,8 @@ NetworkLayer::~NetworkLayer() {
     Disconnect();
 }
 
-ConnectionResult NetworkLayer::Connect(const std::string &hostname, int port, const std::string &username, const std::string &password) {
-    Disconnect();
-
+ConnectionResult NetworkLayer::Connect(const std::string &hostname, int port,
+                                       std::function<ConnectionResult()> authenticate) {
     if (!InitializeLibrary()) {
         return ConnectionResult::UnknownError;
     }
@@ -40,7 +39,7 @@ ConnectionResult NetworkLayer::Connect(const std::string &hostname, int port, co
         return ConnectionResult::NetworkError;
     }
 
-    ConnectionResult authResult = AuthenticatePassword(username, password);
+    ConnectionResult authResult = authenticate();
     if (authResult != ConnectionResult::Success) {
         return authResult;
     }

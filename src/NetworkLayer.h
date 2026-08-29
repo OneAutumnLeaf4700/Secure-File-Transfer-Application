@@ -38,7 +38,7 @@ public:
     ~NetworkLayer();
 
     ConnectionResult Connect(const std::string& hostname, int port,
-                           const std::string& username, const std::string& password);
+                           std::function<ConnectionResult()> authenticate);
     void Disconnect();
     bool IsConnected() const;
 
