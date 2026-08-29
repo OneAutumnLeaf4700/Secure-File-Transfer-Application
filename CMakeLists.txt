@@ -9,6 +9,7 @@ pkg_check_modules(LIBSSH2 REQUIRED libssh2)
 
 add_executable(sfta
     src/main.cpp
+    src/NetworkLayer.cpp
 )
 
 target_include_directories(sfta PRIVATE ${LIBSSH2_INCLUDE_DIRS})
