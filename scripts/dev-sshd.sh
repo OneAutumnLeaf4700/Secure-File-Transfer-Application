@@ -18,13 +18,13 @@ ssh-keygen -y -f "$CLIENT_KEY" > "$AUTH_KEYS"
 cat > "$SSHD_CONFIG" <<EOF
 Port 2222
 ListenAddress 127.0.0.1
-HostKey $HOST_KEY
-AuthorizedKeysFile $AUTH_KEYS
+HostKey "$HOST_KEY"
+AuthorizedKeysFile "$AUTH_KEYS"
 PasswordAuthentication no
 PubkeyAuthentication yes
 UsePAM no
 Subsystem sftp internal-sftp
-PidFile $FIXTURE_DIR/sshd.pid
+PidFile "$FIXTURE_DIR/sshd.pid"
 EOF
 
 case "${1:-start}" in
