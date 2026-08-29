@@ -161,6 +161,7 @@ void NetworkLayer::SetStatusCallback(StatusCallback callback) {
 
 std::vector<RemoteFileInfo> NetworkLayer::ListDirectory(const std::string& remotePath) {
     std::vector<RemoteFileInfo> fileList;
+    m_lastError.clear();
 
     if (!m_connected || !m_sftpSession) {
         m_lastError = "Not connected to server";
