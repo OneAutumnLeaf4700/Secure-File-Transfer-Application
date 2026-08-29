@@ -1,80 +1,66 @@
-# Secure File Transfer Application - GUI Overview
+# Secure File Transfer Application
 
-This C++ Windows application provides a graphical user interface for secure file transfers. The application is built using the Win32 API and includes the following features:
+A command-line SFTP client built on libssh2. Connects to any standard
+SSH/SFTP server, then drops into an interactive shell for browsing and
+transferring files.
 
-## GUI Components
+## Building
 
-### Connection Panel
-- **Server IP Input**: Text field for entering the target server's IP address
-- **Port Input**: Text field for the connection port (defaults to 22 for SSH/SFTP)
-- **Username Input**: Text field for authentication username
-- **Password Input**: Masked text field for authentication password
-- **Connect Button**: Establishes connection to the remote server
-- **Disconnect Button**: Terminates the current connection
+Requires CMake 3.16+, a C++17 compiler, and libssh2 (with pkg-config
+metadata) installed. On Arch Linux:
 
-### File Management
-- **Local Files List**: ListView displaying files on the local machine with columns:
-  - Name: Filename
-  - Size: File size
-  - Type: File type description
-- **Remote Files List**: ListView displaying files on the remote server (populated after connection)
-  - Same column structure as local files
-- **Upload Button**: Transfers selected local files to the remote server
-- **Download Button**: Transfers selected remote files to the local machine
+    sudo pacman -S cmake libssh2
 
-### Status and Progress
-- **Progress Bar**: Shows transfer progress during file operations
-- **Status Label**: Displays current connection and operation status
+Build:
 
-## Current Implementation
+    cmake -S . -B build
+    cmake --build build
 
-### Features Implemented
-- Complete GUI layout with all controls positioned
-- Connection state management (connected/disconnected)
-- Button state management (enable/disable based on connection status)
-- Sample data population for demonstration purposes
-- Basic event handling for all buttons
+The resulting binary is `build/sfta`.
 
-### Sample Data
-The application includes sample files for demonstration:
+## Usage
 
-**Local Files (always visible):**
-- document.pdf (2.3 MB, PDF File)
-- image.jpg (1.8 MB, JPEG Image)
-- data.txt (15 KB, Text File)
+    sfta <host> [-p port] [-u user] [-i keyfile]
 
-**Remote Files (visible when connected):**
-- server_config.xml (5.2 KB, XML File)
-- backup.zip (45.7 MB, ZIP Archive)
+- `-p port`   SSH port (default 22)
+- `-u user`   username (default: your local login name)
+- `-i keyfile` path to a private key for public-key auth (expects a
+  matching `<keyfile>.pub`). Omit to be prompted for a password instead
+  (input is not echoed to the terminal).
 
-### TODO - Future Implementation
-- Actual network connection logic (SSH/SFTP/FTP protocols)
-- Real file system browsing for local files
-- File upload/download functionality
-- Progress tracking during transfers
-- Error handling and validation
-- Encryption/security features
-- Logging capabilities
-- Configuration management
+Example:
 
-## Building and Running
+    sfta test.rebex.net -u demo
+    Password: ******
+    sfta:/> ls
+    sfta:/> cd pub
+    sfta:/pub> get readme.txt
+    sfta:/pub> exit
 
-This project requires:
-- Visual Studio with C++ development tools
-- Windows SDK
-- Common Controls library (comctl32.lib)
+## Shell commands
 
-To build:
-1. Open `Secure File Transfer Application.sln` in Visual Studio
-2. Select Debug or Release configuration
-3. Build the solution (F7 or Build > Build Solution)
+| Command | Description |
+|---|---|
+| `ls [path]` | list a remote directory (defaults to cwd) |
+| `pwd` | print the remote working directory |
+| `cd <path>` | change the remote working directory |
+| `get <remote> [local]` | download a file, with a progress bar |
+| `put <local> [remote]` | upload a file, with a progress bar |
+| `mkdir <path>` | create a remote directory |
+| `rm <path>` | delete a remote file |
+| `rmdir <path>` | remove a remote directory |
+| `progress on\|off` | toggle the transfer progress bar |
+| `help` | show the command list |
+| `exit` | disconnect and quit |
 
-## Architecture
+## Scope
 
-The application follows a traditional Win32 architecture:
-- `WinMain`: Application entry point and message loop
-- `WndProc`: Main window procedure handling user input
-- `InitInstance`: Window creation and GUI component initialization
-- Control handles are stored as global variables for easy access
+This is an SFTP client, not a peer-to-peer tool — it connects to a
+standard SSH/SFTP server. Compression and connection-level tuning are
+not yet implemented.
 
-The GUI is created programmatically using Win32 API calls, providing full control over layout and appearance while maintaining compatibility with all Windows versions.
+## Legacy
+
+An earlier Win32 GUI prototype lives under `legacy/` for reference. It
+is unmaintained and Windows-only; the CLI above is the actively
+developed tool.
