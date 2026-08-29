@@ -24,6 +24,7 @@ private:
     void RegisterCommands();
     void Dispatch(const std::string& line);
     static std::vector<std::string> Tokenize(const std::string& line);
+    static void PrintProgressBar(long long transferred, long long total);
 
     NetworkLayer& m_network;
     Session& m_session;
