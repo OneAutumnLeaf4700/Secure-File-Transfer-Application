@@ -46,7 +46,12 @@ Args ParseArgs(int argc, char** argv) {
     for (int i = 2; i < argc; ++i) {
         std::string flag = argv[i];
         if (flag == "-p" && i + 1 < argc) {
-            args.port = std::stoi(argv[++i]);
+            try {
+                args.port = std::stoi(argv[++i]);
+            } catch (const std::exception&) {
+                std::cerr << "Invalid port: " << argv[i] << "\n";
+                return args;
+            }
         } else if (flag == "-u" && i + 1 < argc) {
             args.user = argv[++i];
         } else if (flag == "-i" && i + 1 < argc) {
