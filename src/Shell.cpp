@@ -43,6 +43,9 @@ void Shell::RegisterCommands() {
             "  cd <path>         change remote working directory\n"
             "  get <remote> [local]  download a file, shows progress\n"
             "  put <local> [remote]  upload a file, shows progress\n"
+            "  mkdir <path>      create a remote directory\n"
+            "  rm <path>         delete a remote file\n"
+            "  rmdir <path>      remove a remote directory\n"
             "  progress on|off       toggle the transfer progress bar\n"
             "  help              show this message\n"
             "  exit              close the connection and quit\n";
@@ -125,6 +128,39 @@ void Shell::RegisterCommands() {
 
         if (!shell.Network().UploadFile(local, remote, cb)) {
             std::cout << "\nput: " << shell.Network().GetLastError() << "\n";
+        }
+    };
+
+    m_commands["mkdir"] = [](Shell& shell, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            std::cout << "mkdir: usage: mkdir <path>\n";
+            return;
+        }
+        std::string path = shell.Sess().Resolve(args[0]);
+        if (!shell.Network().CreateRemoteDirectory(path)) {
+            std::cout << "mkdir: " << shell.Network().GetLastError() << "\n";
+        }
+    };
+
+    m_commands["rm"] = [](Shell& shell, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            std::cout << "rm: usage: rm <path>\n";
+            return;
+        }
+        std::string path = shell.Sess().Resolve(args[0]);
+        if (!shell.Network().DeleteRemoteFile(path)) {
+            std::cout << "rm: " << shell.Network().GetLastError() << "\n";
+        }
+    };
+
+    m_commands["rmdir"] = [](Shell& shell, const std::vector<std::string>& args) {
+        if (args.empty()) {
+            std::cout << "rmdir: usage: rmdir <path>\n";
+            return;
+        }
+        std::string path = shell.Sess().Resolve(args[0]);
+        if (!shell.Network().RemoveRemoteDirectory(path)) {
+            std::cout << "rmdir: " << shell.Network().GetLastError() << "\n";
         }
     };
 }
