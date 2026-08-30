@@ -44,7 +44,7 @@ Example:
 | `ls [path]` | list a remote directory (defaults to cwd) |
 | `pwd` | print the remote working directory |
 | `cd <path>` | change the remote working directory |
-| `get <remote> [local]` | download a file, with a progress bar |
+| `get <remote> [local]` | download a file, with a progress bar (defaults to `./downloads/<name>`) |
 | `put <local> [remote]` | upload a file, with a progress bar |
 | `mkdir <path>` | create a remote directory |
 | `rm <path>` | delete a remote file |

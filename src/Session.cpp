@@ -42,10 +42,7 @@ std::string Session::Resolve(const std::string& path) const {
 
 bool Session::ChangeDirectory(const std::string& path) {
     std::string target = Resolve(path);
-    auto entries = m_network.ListDirectory(target);
-    // ListDirectory returns an empty vector both for "empty dir" and
-    // "failed to open" - disambiguate via GetLastError().
-    if (entries.empty() && !m_network.GetLastError().empty()) {
+    if (!m_network.IsRemoteDirectory(target)) {
         return false;
     }
     m_cwd = target;

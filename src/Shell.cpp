@@ -2,6 +2,11 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <sys/stat.h>
+
+namespace {
+const char* kDownloadDir = "downloads";
+}
 
 Shell::Shell(NetworkLayer& networkLayer, Session& session)
     : m_network(networkLayer), m_session(session), m_running(true), m_progressEnabled(true) {
@@ -42,6 +47,7 @@ void Shell::RegisterCommands() {
             "  pwd               print remote working directory\n"
             "  cd <path>         change remote working directory\n"
             "  get <remote> [local]  download a file, shows progress\n"
+            "                        (defaults to ./downloads/<name>)\n"
             "  put <local> [remote]  upload a file, shows progress\n"
             "  mkdir <path>      create a remote directory\n"
             "  rm <path>         delete a remote file\n"
@@ -97,8 +103,13 @@ void Shell::RegisterCommands() {
             return;
         }
         std::string remote = shell.Sess().Resolve(args[0]);
-        std::string local = args.size() > 1 ? args[1]
-            : remote.substr(remote.find_last_of('/') + 1);
+        std::string local;
+        if (args.size() > 1) {
+            local = args[1];
+        } else {
+            mkdir(kDownloadDir, 0755);
+            local = std::string(kDownloadDir) + "/" + remote.substr(remote.find_last_of('/') + 1);
+        }
 
         ProgressCallback cb = nullptr;
         if (shell.ProgressEnabled()) {

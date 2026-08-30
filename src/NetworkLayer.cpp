@@ -344,6 +344,33 @@ std::vector<RemoteFileInfo> NetworkLayer::ListDirectory(const std::string& remot
     return fileList;
 }
 
+bool NetworkLayer::IsRemoteDirectory(const std::string& remotePath) {
+    m_lastError.clear();
+
+    if (!m_connected || !m_sftpSession) {
+        m_lastError = "Not connected to server";
+        return false;
+    }
+
+    // Uses stat (follows symlinks) rather than opendir/readdir: many SFTP
+    // servers permit traversing a directory without permitting listing it,
+    // so validating cd via a full ListDirectory rejected otherwise-valid
+    // targets.
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    if (libssh2_sftp_stat(m_sftpSession, remotePath.c_str(), &attrs) != 0) {
+        m_lastError = "No such directory: " + remotePath;
+        return false;
+    }
+
+    if (!(attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) ||
+        !(attrs.permissions & LIBSSH2_SFTP_S_IFDIR)) {
+        m_lastError = "Not a directory: " + remotePath;
+        return false;
+    }
+
+    return true;
+}
+
 bool NetworkLayer::CreateRemoteDirectory(const std::string& remotePath) {
     if (!m_connected || !m_sftpSession) {
         m_lastError = "Not connected to server";

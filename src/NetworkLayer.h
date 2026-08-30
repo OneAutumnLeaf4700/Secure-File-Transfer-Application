@@ -50,6 +50,7 @@ public:
                                          const std::string& passphrase = "");
 
     std::vector<RemoteFileInfo> ListDirectory(const std::string& remotePath = ".");
+    bool IsRemoteDirectory(const std::string& remotePath);
     bool CreateRemoteDirectory(const std::string& remotePath);
     bool RemoveRemoteDirectory(const std::string& remotePath);
 
