@@ -61,6 +61,5 @@ not yet implemented.
 
 ## Legacy
 
-An earlier Win32 GUI prototype lives under `legacy/` for reference. It
-is unmaintained and Windows-only; the CLI above is the actively
-developed tool.
+An earlier Win32 GUI prototype preceded this CLI and has been removed
+from the tree; it's still recoverable from git history if needed.
