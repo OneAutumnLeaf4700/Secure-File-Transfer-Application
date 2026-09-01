@@ -13,6 +13,12 @@
 # vcpkg dependency manager
 vcpkg/
 
+# Local AI planning/spec docs (not part of the public project)
+docs/superpowers/
+
+# Default destination for `get`, populated at runtime
+downloads/
+
 # Build outputs
 x64/
 Debug/
