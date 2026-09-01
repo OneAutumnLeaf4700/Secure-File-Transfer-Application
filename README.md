@@ -1,65 +1,62 @@
 # Secure File Transfer Application
 
-A command-line SFTP client built on libssh2. Connects to any standard
-SSH/SFTP server, then drops into an interactive shell for browsing and
-transferring files.
+A C++ SFTP client built directly on libssh2. It connects to any standard SSH/SFTP server —
+password or public-key auth — and drops into an interactive shell for browsing and transferring
+files, with byte-progress bars on `get`/`put` and a hidden-input password prompt.
 
-## Building
+## Why this exists
 
-Requires CMake 3.16+, a C++17 compiler, and libssh2 (with pkg-config
-metadata) installed. On Arch Linux:
+This started as a Win32/ImGui GUI prototype. Once the GUI layer was adding more surface area
+than value, it was deliberately stripped out (see `git log` — `Remove legacy Win32 GUI prototype
+from the tree`) and rebuilt CLI-first on POSIX sockets. The GUI is recoverable from history if a
+GUI is ever worth it again, but the point of the rebuild was to get the transfer/session logic
+solid — connection handling, auth, directory traversal, byte-accurate transfers — before putting
+any UI on top of it.
 
-    sudo pacman -S cmake libssh2
+## What it does
 
-Build:
+- Connects over SSH/SFTP via libssh2 — password auth or public-key auth (`-i keyfile`, expects a
+  matching `<keyfile>.pub`)
+- Interactive shell: `ls`, `pwd`, `cd`, `get`, `put`, `mkdir`, `rm`, `rmdir`, `progress on|off`,
+  `help`, `exit`
+- Real-time byte-progress bar on uploads and downloads
+- Hidden (non-echoed) password entry at the terminal
 
-    cmake -S . -B build
-    cmake --build build
+## Architecture
 
-The resulting binary is `build/sfta`.
+- `NetworkLayer` — owns the libssh2 session/socket lifecycle: connect, auth, SFTP channel setup,
+  and the actual read/write loops for transfers
+- `Session` — tracks remote working-directory state and resolves relative paths against it, so
+  the shell doesn't need to know about the wire protocol
+- `Shell` — parses shell commands and dispatches to `Session`/`NetworkLayer`; this is the only
+  layer that talks to `stdin`/`stdout`
+- `main.cpp` — CLI arg parsing, hidden password prompt, wires the above together and starts the
+  shell loop
 
-## Usage
+## Build & run
 
-    sfta <host> [-p port] [-u user] [-i keyfile]
+Requires CMake 3.16+, a C++17 compiler, and libssh2 (with pkg-config metadata).
 
-- `-p port`   SSH port (default 22)
-- `-u user`   username (default: your local login name)
-- `-i keyfile` path to a private key for public-key auth (expects a
-  matching `<keyfile>.pub`). Omit to be prompted for a password instead
-  (input is not echoed to the terminal).
+```bash
+sudo pacman -S cmake libssh2   # Arch; substitute your package manager
+cmake -S . -B build
+cmake --build build
+```
 
-Example:
+```bash
+build/sfta <host> [-p port] [-u user] [-i keyfile]
+```
 
-    sfta test.rebex.net -u demo
-    Password: ******
-    sfta:/> ls
-    sfta:/> cd pub
-    sfta:/pub> get readme.txt
-    sfta:/pub> exit
-
-## Shell commands
-
-| Command | Description |
-|---|---|
-| `ls [path]` | list a remote directory (defaults to cwd) |
-| `pwd` | print the remote working directory |
-| `cd <path>` | change the remote working directory |
-| `get <remote> [local]` | download a file, with a progress bar (defaults to `./downloads/<name>`) |
-| `put <local> [remote]` | upload a file, with a progress bar |
-| `mkdir <path>` | create a remote directory |
-| `rm <path>` | delete a remote file |
-| `rmdir <path>` | remove a remote directory |
-| `progress on\|off` | toggle the transfer progress bar |
-| `help` | show the command list |
-| `exit` | disconnect and quit |
+```
+sfta test.rebex.net -u demo
+Password: ******
+sfta:/> ls
+sfta:/> cd pub
+sfta:/pub> get readme.txt
+sfta:/pub> exit
+```
 
 ## Scope
 
-This is an SFTP client, not a peer-to-peer tool — it connects to a
-standard SSH/SFTP server. Compression and connection-level tuning are
-not yet implemented.
-
-## Legacy
-
-An earlier Win32 GUI prototype preceded this CLI and has been removed
-from the tree; it's still recoverable from git history if needed.
+This is an SSH/SFTP client talking to a standard server — not a peer-to-peer tool. Compression
+and connection-level tuning are not implemented yet.
